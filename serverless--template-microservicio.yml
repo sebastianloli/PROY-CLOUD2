@@ -1,0 +1,89 @@
+# ============================================================================
+#  PLANTILLA de microservicio  ·  la clonan Integrantes 1, 2 y 3
+#  Reemplaza CHANGEME por: orders | kitchen | integ
+#  Requiere que pp-platform ya esté desplegado en esta cuenta.
+# ============================================================================
+service: pp-CHANGEME
+
+provider:
+  name: aws
+  region: us-east-1
+  runtime: python3.12
+  stage: dev
+
+  # ---- CLAVE EN ACADEMY: usar LabRole, NO crear roles IAM ----
+  iam:
+    role: arn:aws:iam::${aws:accountId}:role/LabRole
+
+  # ---- API protegida con el Cognito compartido (leído de SSM) ----
+  httpApi:
+    authorizers:
+      cognitoJwt:
+        type: jwt
+        identitySource: $request.header.Authorization
+        issuerUrl: https://cognito-idp.${aws:region}.amazonaws.com/${ssm:/pp/userPoolId}
+        audience:
+          - ${ssm:/pp/userPoolClientId}
+
+  # Variables que tu handler usará en runtime
+  environment:
+    EVENT_BUS: ${ssm:/pp/eventBusName}
+    TABLE: pp-CHANGEME-table
+
+functions:
+
+  # Ejemplo de endpoint REST protegido por Cognito
+  crear:
+    handler: handler.crear
+    events:
+      - httpApi:
+          path: /CHANGEME
+          method: post
+          authorizer:
+            name: cognitoJwt
+
+  # Ejemplo de Lambda disparada por un evento del bus pp-bus
+  onEvento:
+    handler: handler.on_evento
+    events:
+      - eventBridge:
+          eventBus: pp-bus           # bus existente creado por pp-platform
+          pattern:
+            source:
+              - pp.orders
+            detail-type:
+              - order.created
+
+resources:
+  Resources:
+
+    # Tabla con tenant_id como PK -> aislamiento multi-tenant
+    Tabla:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: pp-CHANGEME-table
+        BillingMode: PAY_PER_REQUEST     # on-demand: no quema el crédito
+        AttributeDefinitions:
+          - { AttributeName: tenant_id, AttributeType: S }
+          - { AttributeName: sk,        AttributeType: S }
+          - { AttributeName: createdAt, AttributeType: S }
+        KeySchema:
+          - { AttributeName: tenant_id, KeyType: HASH }
+          - { AttributeName: sk,        KeyType: RANGE }
+        # GSI para atender en ORDEN DE LLEGADA (FIFO) por tenant
+        GlobalSecondaryIndexes:
+          - IndexName: byCreatedAt
+            KeySchema:
+              - { AttributeName: tenant_id, KeyType: HASH }
+              - { AttributeName: createdAt, KeyType: RANGE }
+            Projection: { ProjectionType: ALL }
+
+# ----------------------------------------------------------------------------
+# NOTA para Integrante 2 (Step Functions con serverless-step-functions):
+#   La state machine también debe usar LabRole. En su bloque stepFunctions:
+#     stateMachines:
+#       ppKitchenSm:
+#         role: arn:aws:iam::${aws:accountId}:role/LabRole
+#         definition: ...
+#   Los 3 pasos humanos van con  Resource: arn:aws:states:::lambda:invoke.waitForTaskToken
+# ----------------------------------------------------------------------------

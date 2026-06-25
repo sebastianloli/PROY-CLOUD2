@@ -1,0 +1,87 @@
+# ============================================================================
+#  pp-platform  ·  Dueño: Integrante 4
+#  Crea los recursos COMPARTIDOS: bus de eventos + Cognito (auth/multi-tenancy)
+#  y publica sus IDs en SSM para que los demás servicios los lean.
+#  Desplegar SIEMPRE primero:  cd platform && serverless deploy
+# ============================================================================
+service: pp-platform
+
+provider:
+  name: aws
+  region: us-east-1
+  runtime: python3.12
+  stage: dev
+
+  # ---- CLAVE EN ACADEMY: usar LabRole, NO crear roles IAM ----
+  # ${aws:accountId} se resuelve con las credenciales activas, así el MISMO
+  # archivo funciona en cualquier cuenta (la tuya o la cuenta demo).
+  iam:
+    role: arn:aws:iam::${aws:accountId}:role/LabRole
+
+resources:
+  Resources:
+
+    # -------- Bus de eventos compartido (EDA) --------
+    PpBus:
+      Type: AWS::Events::EventBus
+      Properties:
+        Name: pp-bus
+
+    # -------- Cognito User Pool (NO Identity Pool: ese sí crea roles) --------
+    UserPool:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: pp-user-pool
+        UsernameAttributes:
+          - email
+        AutoVerifiedAttributes:
+          - email
+        Schema:
+          - Name: tenant_id          # se usa como custom:tenant_id en el JWT
+            AttributeDataType: String
+            Mutable: true
+            Required: false
+
+    UserPoolClient:
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+        ClientName: pp-web-client
+        UserPoolId: !Ref UserPool
+        GenerateSecret: false        # apps web: sin secret
+        ExplicitAuthFlows:
+          - ALLOW_USER_PASSWORD_AUTH
+          - ALLOW_USER_SRP_AUTH
+          - ALLOW_REFRESH_TOKEN_AUTH
+
+    # -------- Grupos = roles del flujo --------
+    GrupoCliente:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties: { GroupName: cliente,      UserPoolId: !Ref UserPool }
+    GrupoCocinero:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties: { GroupName: cocinero,     UserPoolId: !Ref UserPool }
+    GrupoDespachador:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties: { GroupName: despachador,  UserPoolId: !Ref UserPool }
+    GrupoRepartidor:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties: { GroupName: repartidor,   UserPoolId: !Ref UserPool }
+
+    # -------- Publicar IDs en SSM (los demás leen con ${ssm:/pp/...}) --------
+    ParamUserPoolId:
+      Type: AWS::SSM::Parameter
+      Properties: { Name: /pp/userPoolId,       Type: String, Value: !Ref UserPool }
+    ParamUserPoolClientId:
+      Type: AWS::SSM::Parameter
+      Properties: { Name: /pp/userPoolClientId, Type: String, Value: !Ref UserPoolClient }
+    ParamEventBusName:
+      Type: AWS::SSM::Parameter
+      Properties: { Name: /pp/eventBusName,     Type: String, Value: !Ref PpBus }
+
+  Outputs:
+    UserPoolId:
+      Value: !Ref UserPool
+    UserPoolClientId:
+      Value: !Ref UserPoolClient
+    EventBusName:
+      Value: !Ref PpBus
